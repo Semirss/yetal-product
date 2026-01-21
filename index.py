@@ -183,7 +183,7 @@ else:
         logger.error("❌ AWS_BUCKET_NAME is not configured")
     logger.warning("⚠️ S3 functionality will be disabled")
 
-HUGGINGFACE_API_TOKEN = "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"
+HUGGINGFACE_API_TOKEN = os.getenv("HUGGINGFACE_API_TOKEN")
 logger.info(f"🔧 Hugging Face API Token: {'SET' if HUGGINGFACE_API_TOKEN and len(HUGGINGFACE_API_TOKEN) > 10 else 'INVALID/EMPTY'}")
 
 # Custom Redis Persistence Class with S3 Backup
