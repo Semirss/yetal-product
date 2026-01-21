@@ -2462,6 +2462,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     help_text = (
         "📚 *Available Commands:*\n\n"
+        "v1.0\n"
         "*Basic Commands:*\n"
         "/start - Welcome message\n"
         "/help - This message\n"
