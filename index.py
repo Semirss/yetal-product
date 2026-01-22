@@ -51,7 +51,7 @@ load_dotenv()
 
 # Load MongoDB configuration
 logger = logging.getLogger(__name__)
-
+Main_channelusername =os.getenv("Main_channelusername")
 MONGO_URI = os.getenv("MONGO_URI")
 if MONGO_URI:
     client = MongoClient(MONGO_URI)
@@ -73,6 +73,7 @@ logging.basicConfig(
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 MASTER_DATA_CHANNEL_ID = os.getenv("MASTER_DATA_CHANNEL_ID")
 PRODUCT_CHANNEL_ID = os.getenv("PRODUCT_CHANNEL_ID")
+YETAL_SEARCH_USERNAME = os.getenv("YETAL_SEARCH_USERNAME", "Yetal_Search")
 
 # S3 configuration - FIXED to work without ListAllMyBuckets permission
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
@@ -836,7 +837,7 @@ if not BOT_TOKEN or not MASTER_DATA_CHANNEL_ID or not PRODUCT_CHANNEL_ID:
     REPOST_SELECT_DAYS,
     REPOST_GET_CHANNEL,
     REPOST_CONFIRM
-) = range(16)
+) = range(17)
 
 # Constants
 MAX_TITLE_LENGTH = 100
@@ -1582,11 +1583,11 @@ async def finish_product(update: Update, context: ContextTypes.DEFAULT_TYPE, sto
         # Create proper post link using YETAL channel message ID
         if yetal_message_id:
             # Use Yetal_Search channel format for post links
-            post_link = f"https://t.me/Yetal_Search/{yetal_message_id}"
+            post_link = f"https://t.me/{YETAL_SEARCH_USERNAME}/{yetal_message_id}"
             logger.info(f"🔗 Post link created: {post_link} (Yetal message ID: {yetal_message_id})")
         else:
             # Fallback if Yetal message ID not available
-            post_link = f"https://t.me/Yetal_Search/{product_ref}"
+            post_link = f"https://t.me/{YETAL_SEARCH_USERNAME}/{product_ref}"
             logger.warning(f"⚠️ Using fallback post link: {post_link}")
 
         # Store in recent products
@@ -2613,11 +2614,47 @@ async def start_repost(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return REPOST_SELECT_DAYS
 
-    # No argument, ask for channel
+    # No argument, check for persistent channel
+    stored_channel = context.user_data.get("repost_channel")
+    if stored_channel:
+        keyboard = [
+            [InlineKeyboardButton(f"Yes, use {stored_channel}", callback_data="use_stored_channel")],
+            [InlineKeyboardButton("No, change channel", callback_data="change_channel")]
+        ]
+        await update.message.reply_text(
+            f"🔄 Last used channel: {stored_channel}. Use this one?",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return REPOST_CONFIRM
+
     await update.message.reply_text(
         "📡 Please enter the source channel username (e.g., @OriginalChannel):"
     )
     return REPOST_GET_CHANNEL
+
+async def handle_repost_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles confirmation of stored channel"""
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "use_stored_channel":
+        username = context.user_data.get("repost_channel")
+        keyboard = [
+            [InlineKeyboardButton("7 Days", callback_data="days_7")],
+            [InlineKeyboardButton("10 Days", callback_data="days_10")],
+            [InlineKeyboardButton("20 Days", callback_data="days_20")]
+        ]
+        await query.edit_message_text(
+            f"📅 Channel set to {username}. How many days of content do you want to repost?",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return REPOST_SELECT_DAYS
+    
+    elif query.data == "change_channel":
+        await query.edit_message_text(
+            "📡 Please enter the new source channel username (e.g., @OriginalChannel):"
+        )
+        return REPOST_GET_CHANNEL
 
 async def handle_repost_get_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles channel input"""
@@ -2710,7 +2747,7 @@ async def handle_repost_days(update: Update, context: ContextTypes.DEFAULT_TYPE)
                         "location": item["location"],
                         "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "channel": username,
-                        "post_link": f"https://t.me/Yetal_Search/{yetal_msg_id}" if yetal_msg_id else f"https://t.me/{username.replace('@','')}/{item['product_ref']}",
+                        "post_link": f"https://t.me/{YETAL_SEARCH_USERNAME}/{yetal_msg_id}" if yetal_msg_id else f"https://t.me/{username.replace('@','')}/{item['product_ref']}",
                         "product_ref": str(yetal_msg_id) if yetal_msg_id else item["product_ref"],
                         "scraped_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "predicted_category": "Other",
@@ -2886,6 +2923,9 @@ def main():
         states={
             REPOST_GET_CHANNEL: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_repost_get_channel)
+            ],
+            REPOST_CONFIRM: [
+                 CallbackQueryHandler(handle_repost_confirm, pattern="^use_stored_channel$|^change_channel$")
             ],
             REPOST_SELECT_DAYS: [
                 CallbackQueryHandler(handle_repost_days, pattern="^days_")

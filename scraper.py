@@ -162,10 +162,29 @@ def extract_info(text, message_id):
     
     channel_mention = re.search(r'(@\w+)', text)
     channel_mention = channel_mention.group(1) if channel_mention else ""
+
+    # Clean description by removing extracted metadata lines
+    clean_description = text
+    if title_match:
+        clean_description = clean_description.replace(title_match, "")
+    
+    # Remove metadata patterns from description to avoid duplication
+    metadata_patterns = [
+        r'(Price|💸|☘️☘️PRICE)[:\s]*([\d,]+)|([\d,]+)\s*(ETB|Birr|birr|💵)',
+        r'(📍|Address|Location|🌺🌺)[:\s]*(.+?)(?=\n|☘️|📞|@|$)',
+        r'(\+251\d{8,9}|09\d{8})',
+        r'(@\w+)'
+    ]
+    
+    for pattern in metadata_patterns:
+        clean_description = re.sub(pattern, "", clean_description, flags=re.IGNORECASE)
+    
+    # Clean up extra whitespace and newlines
+    clean_description = "\n".join([line.strip() for line in clean_description.split('\n') if line.strip()])
     
     return {
         "title": title,
-        "description": text,
+        "description": clean_description,
         "price": price,
         "phone": phone,
         "location": location,
