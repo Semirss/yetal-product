@@ -121,7 +121,10 @@ async def get_telethon_client():
     return None
 
 def clean_text(text):
-    return ' '.join(text.replace('\xa0', ' ').split())
+    if not text:
+        return ""
+    # Only normalize non-breaking spaces, preserve newlines
+    return text.replace('\xa0', ' ')
 
 def extract_info(text, message_id):
     if not text:
@@ -135,8 +138,11 @@ def extract_info(text, message_id):
             "product_ref": str(message_id)
         }
 
-    text = clean_text(text)
+    # Text is already reasonably clean, just strip edges
+    text = clean_text(text).strip()
     
+    # Extract Title (first line or until price/special chars)
+    # matching until newline OR price markers
     title_match = re.split(r'\n|💸|☘️☘️PRICE|Price\s*:|💵', text)[0].strip()
     title = title_match[:100] if title_match else "No Title"
     
@@ -165,13 +171,19 @@ def extract_info(text, message_id):
 
     # Clean description by removing extracted metadata lines
     clean_description = text
-    if title_match:
-        clean_description = clean_description.replace(title_match, "")
+    
+    # Remove title if it's at the start
+    if title_match and clean_description.startswith(title_match):
+        clean_description = clean_description[len(title_match):].strip()
+    elif title_match:
+         clean_description = clean_description.replace(title_match, "", 1)
     
     # Remove metadata patterns from description to avoid duplication
     metadata_patterns = [
-        r'(Price|💸|☘️☘️PRICE)[:\s]*([\d,]+)|([\d,]+)\s*(ETB|Birr|birr|💵)',
+        r'(Price|💸|☘️☘️PRICE)[:\s]*([\d,]+[.,]?\d*)\s*(ETB|Birr|birr|💵)?',
+        r'([\d,]+)\s*(ETB|Birr|birr|💵)',
         r'(📍|Address|Location|🌺🌺)[:\s]*(.+?)(?=\n|☘️|📞|@|$)',
+        r'(📞|Contact|Phone)[:\s]*(\+251\d{8,9}|09\d{8})',
         r'(\+251\d{8,9}|09\d{8})',
         r'(@\w+)'
     ]
@@ -179,8 +191,11 @@ def extract_info(text, message_id):
     for pattern in metadata_patterns:
         clean_description = re.sub(pattern, "", clean_description, flags=re.IGNORECASE)
     
-    # Clean up extra whitespace and newlines
-    clean_description = "\n".join([line.strip() for line in clean_description.split('\n') if line.strip()])
+    # Clean up extra whitespace and newlines (preserve paragraph structure)
+    # Remove single empty lines but keep double newlines (paragraphs)? 
+    # Or just strip leading/trailing from lines and remove purely empty lines.
+    lines = [line.strip() for line in clean_description.split('\n')]
+    clean_description = "\n".join([line for line in lines if line])
     
     return {
         "title": title,

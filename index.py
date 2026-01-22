@@ -1045,8 +1045,9 @@ def format_product_message(product_data: dict, channel_data: dict, post_link: st
         f"{product_data.get('description', 'No description')}\n\n"
     )
 
-    if product_data.get("price_visible", 1):
-        message += f"💰 Price: ETB {float(product_data.get('price', 0)):.2f}\n"
+    price_val = float(product_data.get('price', 0))
+    if product_data.get("price_visible", 1) and price_val > 0:
+        message += f"💰 Price: ETB {price_val:.2f}\n"
     else:
         message += "💰 Price: Contact for price\n"
 
@@ -2716,6 +2717,15 @@ async def handle_repost_days(update: Update, context: ContextTypes.DEFAULT_TYPE)
         }
         
         for item in items:
+            # Create channel data specific for this item to ensure correct contact/location
+            item_channel_data = {
+                "username": username,
+                "title": f"Scraped from {username}",
+                "contact": item["phone"] if item["phone"] else "See original",
+                "location": item["location"] if item["location"] else "See original",
+                "channel_id": None 
+            }
+
             # Basic product structure
             product_data = {
                 "title": item["title"],
@@ -2729,9 +2739,8 @@ async def handle_repost_days(update: Update, context: ContextTypes.DEFAULT_TYPE)
             }
             
             try:
-                # Use common posting function (it will handle proper JSON saving and channel posting)
-                # Note: channel_id is None, so it won't post to a user channel, but WILL post to PRODUCT_CHANNEL_ID
-                success, _, _, _, yetal_msg_id, _ = await post_product_to_channels(product_data, channel_data, context, is_edited=False)
+                # Use common posting function
+                success, _, _, _, yetal_msg_id, _ = await post_product_to_channels(product_data, item_channel_data, context, is_edited=False)
                 
                 if success:
                     # Save to JSON manually since we're in a loop content
