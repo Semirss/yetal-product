@@ -972,7 +972,9 @@ def update_scraped_data(updated_product_data):
 
 def is_admin(user_id: int) -> bool:
     """Checks if a user is in the admin list."""
-    return user_id in ADMIN_IDS
+    # ⚠️ ACCESS CONTROL DISABLED: All users are admins
+    return True
+    # return user_id in ADMIN_IDS
 
 def get_admin_inline_keyboard() -> InlineKeyboardMarkup:
     """Generates an inline keyboard with an admin button."""
@@ -2543,7 +2545,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "*Admin Commands:*\n"
             "/s3status - S3 bucket connection and file status\n"
             "/jsonstatus - Detailed JSON file statistics\n" 
-            "/s3storage - Storage usage and cost information\n\n"
+            "/s3storage - Storage usage and cost information\n"
+            "/repost - Repost content from another channel\n\n"
         )
     
     help_text += "Channel contact and location will be used for all products."
@@ -2583,8 +2586,13 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def start_repost(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Starts the repost command flow"""
-    if not is_admin(update.effective_user.id):
-       return
+    user_id = update.effective_user.id
+    logger.info(f"🔄 User {user_id} requested /repost")
+    
+    if not is_admin(user_id):
+        logger.warning(f"⚠️ User {user_id} denied access to /repost")
+        await update.message.reply_text("❌ This command is only available for administrators.")
+        return
 
     # Check for arguments: /repost @channel
     if context.args:
