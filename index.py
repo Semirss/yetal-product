@@ -17,6 +17,9 @@ import time
 import requests
 import redis
 from telegram.ext import BasePersistence
+# Import scraper module
+import scraper
+import shutil
 
 from telegram import (
     Update,
@@ -176,7 +179,7 @@ if S3 and AWS_BUCKET_NAME:
     except Exception as e:
         logger.warning(f"⚠️ S3 credentials test had issues: {e}")
         # Continue with S3 client - some operations might still work
-else:
+else: 
     if not S3:
         logger.error("❌ S3 client creation failed")
     if not AWS_BUCKET_NAME:
@@ -830,7 +833,10 @@ if not BOT_TOKEN or not MASTER_DATA_CHANNEL_ID or not PRODUCT_CHANNEL_ID:
     EDIT_SELECT_PRODUCT,
     EDIT_FIELD_SELECT,
     EDIT_NEW_VALUE,
-) = range(13)
+    REPOST_SELECT_DAYS,
+    REPOST_GET_CHANNEL,
+    REPOST_CONFIRM
+) = range(16)
 
 # Constants
 MAX_TITLE_LENGTH = 100
@@ -1074,22 +1080,56 @@ async def post_product_to_channels(
     yetal_msg_id = None  # This will store the Yetal_Search channel message ID
     user_message = ""
     
+    # Get media paths if available (for scraped items)
+    media_paths = product_data.get("media_paths", [])
+    
     try:
         # Post to user channel if available
         if target_channel_id:
             user_message = format_product_message(product_data, channel_data)
-            if product_data.get("photo_file_id"):
+            
+            # Case 1: Media Group (Album)
+            if media_paths and len(media_paths) > 1:
+                media_group = []
+                for idx, path in enumerate(media_paths):
+                    try:
+                        # Attach caption only to the first photo
+                        caption = user_message if idx == 0 else None
+                        media_group.append(InputMediaPhoto(open(path, 'rb'), caption=caption, parse_mode="Markdown"))
+                    except Exception as e:
+                        logger.error(f"Error opening media path {path}: {e}")
+                
+                if media_group:
+                    msgs = await context.bot.send_media_group(chat_id=target_channel_id, media=media_group)
+                    user_msg_id = msgs[0].message_id
+            
+            # Case 2: Single File ID (from /addproduct)
+            elif product_data.get("photo_file_id"):
                 user_msg = await context.bot.send_photo(
                     chat_id=target_channel_id,
                     photo=product_data["photo_file_id"],
                     caption=user_message,
                     parse_mode="Markdown",
                 )
+                user_msg_id = user_msg.message_id
+                
+            # Case 3: Single Local File (from scraped single item)
+            elif media_paths and len(media_paths) == 1:
+                user_msg = await context.bot.send_photo(
+                    chat_id=target_channel_id,
+                    photo=open(media_paths[0], 'rb'),
+                    caption=user_message,
+                    parse_mode="Markdown",
+                )
+                user_msg_id = user_msg.message_id
+                
+            # Case 4: Text Only
             else:
                 user_msg = await context.bot.send_message(
                     chat_id=target_channel_id, text=user_message, parse_mode="Markdown"
                 )
-            user_msg_id = user_msg.message_id  # This is the user channel message ID
+                user_msg_id = user_msg.message_id
+            
             target_channel_username = channel_data.get("username", "").replace("@", "")
             logger.info(f"✅ Product posted to user channel: {target_channel_id}, Message ID: {user_msg_id}")
 
@@ -1106,7 +1146,8 @@ async def post_product_to_channels(
                 "photo_file_id": product_data.get("photo_file_id"),
                 "username": channel_data.get("username"),
                 "predicted_category": product_data.get("predicted_category"),
-                "generated_description": product_data.get("generated_description")
+                "generated_description": product_data.get("generated_description"),
+                "has_media_group": len(media_paths) > 1 
             },
             message_id=str(user_msg_id) if user_msg_id else None
         )
@@ -1129,20 +1170,50 @@ async def post_product_to_channels(
                     is_edited
                 )
                 
-                if product_data.get("photo_file_id"):
+                # Case 1: Media Group (Album)
+                if media_paths and len(media_paths) > 1:
+                    media_group = []
+                    for idx, path in enumerate(media_paths):
+                        try:
+                            # Attach caption only to the first photo
+                            caption = master_message if idx == 0 else None
+                            media_group.append(InputMediaPhoto(open(path, 'rb'), caption=caption, parse_mode="Markdown"))
+                        except Exception as e:
+                            logger.error(f"Error opening media path {path} for Yetal: {e}")
+                            
+                    if media_group:
+                        msgs = await context.bot.send_media_group(chat_id=PRODUCT_CHANNEL_ID, media=media_group)
+                        yetal_msg_id = msgs[0].message_id
+                
+                # Case 2: Single File ID
+                elif product_data.get("photo_file_id"):
                     product_msg = await context.bot.send_photo(
                         chat_id=PRODUCT_CHANNEL_ID,  # This is Yetal_Search channel
                         photo=product_data["photo_file_id"],
                         caption=master_message,
                         parse_mode="Markdown",
                     )
+                    yetal_msg_id = product_msg.message_id
+                    
+                # Case 3: Single Local File
+                elif media_paths and len(media_paths) == 1:
+                    product_msg = await context.bot.send_photo(
+                        chat_id=PRODUCT_CHANNEL_ID,
+                        photo=open(media_paths[0], 'rb'),
+                        caption=master_message,
+                        parse_mode="Markdown",
+                    )
+                    yetal_msg_id = product_msg.message_id
+                    
+                # Case 4: Text Only
                 else:
                     product_msg = await context.bot.send_message(
                         chat_id=PRODUCT_CHANNEL_ID,
                         text=master_message,
                         parse_mode="Markdown",
                     )
-                yetal_msg_id = product_msg.message_id  # This is the Yetal_Search channel message ID
+                    yetal_msg_id = product_msg.message_id
+                    
                 logger.info(f"✅ Product posted to Yetal_Search channel: {PRODUCT_CHANNEL_ID}, Message ID: {yetal_msg_id}")
             except Exception as e:
                 logger.error(f"❌ Failed to post to Yetal_Search channel {PRODUCT_CHANNEL_ID}: {e}")
@@ -2456,6 +2527,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     help_text = (
         "📚 *Available Commands:*\n\n"
+        "v1.0\n"
         "*Basic Commands:*\n"
         "/start - Welcome message\n"
         "/help - This message\n"
@@ -2505,6 +2577,165 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         del context.user_data["current_channel"]
 
     await update.message.reply_text("❌ Operation cancelled.")
+    return ConversationHandler.END
+
+# --- Repost Command Handlers ---
+
+async def start_repost(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Starts the repost command flow"""
+    if not is_admin(update.effective_user.id):
+       return
+
+    # Check for arguments: /repost @channel
+    if context.args:
+        username = context.args[0]
+        if not username.startswith("@"):
+            username = f"@{username}"
+        context.user_data["repost_channel"] = username
+        
+        # Skip to days selection
+        keyboard = [
+            [InlineKeyboardButton("7 Days", callback_data="days_7")],
+            [InlineKeyboardButton("10 Days", callback_data="days_10")],
+            [InlineKeyboardButton("20 Days", callback_data="days_20")]
+        ]
+        await update.message.reply_text(
+            f"📅 Channel set to {username}. How many days of content do you want to repost?",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return REPOST_SELECT_DAYS
+
+    # No argument, ask for channel
+    await update.message.reply_text(
+        "📡 Please enter the source channel username (e.g., @OriginalChannel):"
+    )
+    return REPOST_GET_CHANNEL
+
+async def handle_repost_get_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles channel input"""
+    username = update.message.text.strip()
+    if not username.startswith("@"):
+        username = f"@{username}"
+    
+    context.user_data["repost_channel"] = username
+    
+    keyboard = [
+        [InlineKeyboardButton("7 Days", callback_data="days_7")],
+        [InlineKeyboardButton("10 Days", callback_data="days_10")],
+        [InlineKeyboardButton("20 Days", callback_data="days_20")]
+    ]
+    await update.message.reply_text(
+        f"📅 Channel set to {username}. How many days of content do you want to repost?",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return REPOST_SELECT_DAYS
+
+async def handle_repost_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles day selection and triggers scraping"""
+    query = update.callback_query
+    await query.answer()
+    
+    days = int(query.data.split("_")[1])
+    username = context.user_data.get("repost_channel")
+    
+    await query.edit_message_text(
+        f"⏳ Starting scraping from {username} for the last {days} days...\n"
+        "This may take a while depending on the number of messages."
+    )
+    
+    # Run scraping
+    try:
+        success, result = await scraper.scrape_channel_async(username, days)
+        
+        if not success:
+            await context.bot.send_message(chat_id=update.effective_chat.id, text=f"❌ Scraping failed: {result}")
+            return ConversationHandler.END
+            
+        items = result
+        if not items:
+            await context.bot.send_message(chat_id=update.effective_chat.id, text="📭 No items found in the specified period.")
+            return ConversationHandler.END
+            
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=f"✅ Found {len(items)} items. Starting upload and repost process...")
+        
+        # Process items
+        processed_count = 0
+        
+        # We define a dummy channel data for the source for display purposes
+        channel_data = {
+            "username": username,
+            "title": f"Scraped from {username}",
+            "contact": "See original",
+            "location": "See original",
+            "channel_id": None # No posting to user channel, only to Product Channel
+        }
+        
+        for item in items:
+            # Basic product structure
+            product_data = {
+                "title": item["title"],
+                "description": item["description"],
+                "price": item["price"] if item["price"] else 0,
+                "price_visible": 1,
+                "stock": 1,
+                "predicted_category": "Other", 
+                "generated_description": item["description"],
+                "media_paths": item.get("media_paths", ([item["media_path"]] if item.get("media_path") else []))
+            }
+            
+            try:
+                # Use common posting function (it will handle proper JSON saving and channel posting)
+                # Note: channel_id is None, so it won't post to a user channel, but WILL post to PRODUCT_CHANNEL_ID
+                success, _, _, _, yetal_msg_id, _ = await post_product_to_channels(product_data, channel_data, context, is_edited=False)
+                
+                if success:
+                    # Save to JSON manually since we're in a loop content
+                    # But wait, post_product_to_channels sends to Master Channel, but does NOT save to scraped_data.json
+                    # finish_product does the saving. So we need to save here.
+                    
+                    json_product_data = {
+                        "user_id": str(update.effective_user.id),
+                        "title": product_data["title"],
+                        "description": product_data["description"],
+                        "price": str(product_data["price"]),
+                        "phone": item["phone"],
+                        "location": item["location"],
+                        "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "channel": username,
+                        "post_link": f"https://t.me/Yetal_Search/{yetal_msg_id}" if yetal_msg_id else f"https://t.me/{username.replace('@','')}/{item['product_ref']}",
+                        "product_ref": str(yetal_msg_id) if yetal_msg_id else item["product_ref"],
+                        "scraped_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "predicted_category": "Other",
+                        "generated_description": product_data["description"],
+                        "channel_verified": False,
+                         "has_media_group": len(product_data["media_paths"]) > 1
+                    }
+                    append_to_scraped_data(json_product_data)
+                    processed_count += 1
+                    
+            except Exception as e:
+                logger.error(f"Failed to process item {item['title']}: {e}")
+            
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=f"✅ Reposting complete! Processed {processed_count} items.")
+        
+        # Cleanup
+        try:
+            shutil.rmtree("telegram_cache")
+        except:
+            pass
+            
+    except Exception as e:
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=f"❌ Error: {e}")
+        
+    return ConversationHandler.END
+
+async def cancel_repost(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancels repost"""
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text("❌ Repost cancelled.")
+    else:
+        await update.message.reply_text("❌ Repost cancelled.")
     return ConversationHandler.END
 
 # --- Application Setup ---
@@ -2641,17 +2872,35 @@ def main():
 # Don't forget to add this to your application:
 # application.add_handler(edit_conv)
 
+    # Repost conversation
+    repost_conv = ConversationHandler(
+        entry_points=[CommandHandler("repost", start_repost)],
+        states={
+            REPOST_GET_CHANNEL: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_repost_get_channel)
+            ],
+            REPOST_SELECT_DAYS: [
+                CallbackQueryHandler(handle_repost_days, pattern="^days_")
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_repost)],
+    )
+
     application.add_handler(channel_conv)
     application.add_handler(product_conv)
     application.add_handler(edit_conv)
-
-    # Note: Redis persistence handles automatic persistence, no manual sync needed
-
-    # Start the bot
-    logger.info("Bot is starting...")
+    application.add_handler(repost_conv)
     
-    # Start keep-alive service before polling
-    start_keep_alive()
+    # Start independent keep-alive thread
+    if HEALTH_CHECK_URL:
+        start_keep_alive()
+
+    # Run the bot
+    if not BOT_TOKEN:
+        logger.error("❌ Bot token not found! Set TELEGRAM_BOT_TOKEN environment variable.")
+        return
+
+    logger.info("🤖 Bot is starting...")
     
     # Start auto-backup task after application is initialized
     async def start_auto_backup_task(app: Application):

@@ -199,42 +199,102 @@ async def scrape_channel_async(channel_username: str, days: int):
         temp_dir = "telegram_cache"
         os.makedirs(temp_dir, exist_ok=True)
 
+        # Buffer for grouped messages (albums)
+        grouped_messages = {}
+        
+        # We need to iterate in reverse order (oldest to newest) to properly reconstruct albums if we were streaming,
+        # but iter_messages goes new->old. We'll collect all relevant messages first.
+        messages_to_process = []
         async for message in telethon_client.iter_messages(entity, limit=None):
             if message.date < cutoff:
                 break
-            
-            if not message.text and not message.media:
-                continue
-
             # Skip service messages
             if message.action:
                 continue
-
-            info = extract_info(message.text, message.id)
+            messages_to_process.append(message)
             
-            # Download media if exists
-            media_path = None
-            if message.media:
-                try:
-                    filename = f"{channel_username}_{message.id}"
-                    path = await message.download_media(file=os.path.join(temp_dir, filename))
-                    media_path = path
-                except Exception as e:
-                    logger.error(f"Failed to download media for {message.id}: {e}")
+        # Process messages from newest to oldest (default order from iter_messages)
+        # But we need to group them.
+        
+        processed_group_ids = set()
 
-            item = {
-                "title": info["title"],
-                "description": info["description"],
-                "price": info["price"],
-                "phone": info["phone"],
-                "location": info["location"],
-                "original_date": message.date.isoformat(),
-                "original_link": f"https://t.me/{channel_username.replace('@', '')}/{message.id}",
-                "media_path": media_path,
-                "product_ref": str(message.id),
-                "source_channel": channel_username
-            }
-            scraped_items.append(item)
+        for message in messages_to_process:
+            if not message.text and not message.media:
+                continue
+
+            # Handle grouped messages (albums)
+            if message.grouped_id:
+                if message.grouped_id in processed_group_ids:
+                    continue
+                
+                # Find all messages in this group from our fetched list
+                group_msgs = [m for m in messages_to_process if m.grouped_id == message.grouped_id]
+                processed_group_ids.add(message.grouped_id)
+                
+                # Sort by id (usually implies order)
+                group_msgs.sort(key=lambda x: x.id)
+                
+                # Use the first message (or the one with text) as the main one
+                main_msg = next((m for m in group_msgs if m.text), group_msgs[0])
+                info = extract_info(main_msg.text, main_msg.id)
+                
+                media_paths = []
+                for g_msg in group_msgs:
+                    if g_msg.media:
+                        try:
+                            filename = f"{channel_username}_{g_msg.id}"
+                            path = await g_msg.download_media(file=os.path.join(temp_dir, filename))
+                            if path:
+                                media_paths.append(path)
+                        except Exception as e:
+                            logger.error(f"Failed to download media for {g_msg.id}: {e}")
+                
+                item = {
+                    "title": info["title"],
+                    "description": info["description"],
+                    "price": info["price"],
+                    "phone": info["phone"],
+                    "location": info["location"],
+                    "original_date": main_msg.date.isoformat(),
+                    "original_link": f"https://t.me/{channel_username.replace('@', '')}/{main_msg.id}",
+                    "media_path": media_paths[0] if media_paths else None,
+                    "media_paths": media_paths, # New field for list of paths
+                    "product_ref": str(main_msg.id),
+                    "source_channel": channel_username
+                }
+                scraped_items.append(item)
+                
+            else:
+                # Single message
+                info = extract_info(message.text, message.id)
+                
+                # Download media if exists
+                media_path = None
+                media_paths = []
+                if message.media:
+                    try:
+                        filename = f"{channel_username}_{message.id}"
+                        path = await message.download_media(file=os.path.join(temp_dir, filename))
+                        media_path = path
+                        if path:
+                            media_paths.append(path)
+                    except Exception as e:
+                        logger.error(f"Failed to download media for {message.id}: {e}")
+
+                item = {
+                    "title": info["title"],
+                    "description": info["description"],
+                    "price": info["price"],
+                    "phone": info["phone"],
+                    "location": info["location"],
+                    "original_date": message.date.isoformat(),
+                    "original_link": f"https://t.me/{channel_username.replace('@', '')}/{message.id}",
+                    "media_path": media_path,
+                    "media_paths": media_paths,
+                    "product_ref": str(message.id),
+                    "source_channel": channel_username
+                }
+                scraped_items.append(item)
             
         logger.info(f"✅ Scraped {len(scraped_items)} items")
         return True, scraped_items

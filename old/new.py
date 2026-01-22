@@ -2,7 +2,7 @@ import logging
 import re
 import os
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from uuid import uuid4
 import pandas as pd
 import tempfile
@@ -70,7 +70,6 @@ logging.basicConfig(
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 MASTER_DATA_CHANNEL_ID = os.getenv("MASTER_DATA_CHANNEL_ID")
 PRODUCT_CHANNEL_ID = os.getenv("PRODUCT_CHANNEL_ID")
-FORWARD_CHANNEL = os.getenv("FORWARD_CHANNEL")  # For scraping and forwarding
 
 # S3 configuration - FIXED to work without ListAllMyBuckets permission
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
@@ -184,7 +183,7 @@ else:
         logger.error("❌ AWS_BUCKET_NAME is not configured")
     logger.warning("⚠️ S3 functionality will be disabled")
 
-HUGGINGFACE_API_TOKEN = os.getenv("HUGGINGFACE_API_TOKEN");
+HUGGINGFACE_API_TOKEN = os.getenv("HUGGINGFACE_API_TOKEN")
 logger.info(f"🔧 Hugging Face API Token: {'SET' if HUGGINGFACE_API_TOKEN and len(HUGGINGFACE_API_TOKEN) > 10 else 'INVALID/EMPTY'}")
 
 # Custom Redis Persistence Class with S3 Backup
@@ -831,10 +830,7 @@ if not BOT_TOKEN or not MASTER_DATA_CHANNEL_ID or not PRODUCT_CHANNEL_ID:
     EDIT_SELECT_PRODUCT,
     EDIT_FIELD_SELECT,
     EDIT_NEW_VALUE,
-    # New states for scraping and forwarding
-    SELECT_POST_COUNT,
-    SELECT_CHANNEL_FOR_SCRAPING,
-) = range(15)
+) = range(13)
 
 # Constants
 MAX_TITLE_LENGTH = 100
@@ -2056,289 +2052,6 @@ async def cancel_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text("❌ Editing cancelled. No changes were made.")
     return ConversationHandler.END
 
-# =============================================
-# NEW: SCRAPING AND FORWARDING FUNCTIONALITY
-# =============================================
-
-async def start_scraping_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Starts the scraping and forwarding flow"""
-    # First ask for the channel username
-    await update.message.reply_text(
-        "📢 Enter the channel username to scrape from (e.g., @channel_username):"
-    )
-    return SELECT_CHANNEL_FOR_SCRAPING
-
-async def handle_scraping_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles the channel username input for scraping"""
-    channel_username = update.message.text.strip()
-    
-    # Validate channel username
-    if not channel_username.startswith("@"):
-        channel_username = f"@{channel_username}"
-    
-    # Store the channel username in context
-    context.user_data["scraping_channel"] = channel_username
-    
-    # Now ask for the number of posts
-    keyboard = [
-        [InlineKeyboardButton("5 posts", callback_data="posts_5")],
-        [InlineKeyboardButton("10 posts", callback_data="posts_10")],
-        [InlineKeyboardButton("20 posts", callback_data="posts_20")],
-        [InlineKeyboardButton("50 posts", callback_data="posts_50")],
-        [InlineKeyboardButton("❌ Cancel", callback_data="cancel_scraping")],
-    ]
-    
-    await update.message.reply_text(
-        f"🔍 How many posts would you like to scrape from {channel_username}?",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-    return SELECT_POST_COUNT
-
-async def handle_post_count_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles the post count selection"""
-    query = update.callback_query
-    await query.answer()
-    
-    if query.data == "cancel_scraping":
-        await query.edit_message_text("❌ Scraping cancelled.")
-        return ConversationHandler.END
-    
-    # Extract the number of posts from callback data
-    num_posts = int(query.data.split("_")[1])
-    channel_username = context.user_data.get("scraping_channel")
-    
-    await query.edit_message_text(
-        f"🔄 Starting to scrape {num_posts} posts from {channel_username}...\n"
-        f"This may take a few moments..."
-    )
-    
-    # Run the scraping and forwarding in a background thread
-    import threading
-    thread = threading.Thread(
-        target=run_scraping_and_forwarding,
-        args=(update, context, channel_username, num_posts)
-    )
-    thread.start()
-    
-    return ConversationHandler.END
-
-def run_scraping_and_forwarding(update, context, channel_username, num_posts):
-    """Run scraping and forwarding in a background thread"""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        result = loop.run_until_complete(scrape_and_forward_posts(channel_username, num_posts, context))
-        
-        # Send result back to user
-        async def send_result():
-            try:
-                await context.bot.send_message(
-                    chat_id=update.effective_chat.id,
-                    text=result
-                )
-            except Exception as e:
-                logger.error(f"Failed to send result: {e}")
-        
-        loop.run_until_complete(send_result())
-    except Exception as e:
-        logger.error(f"Error in scraping thread: {e}")
-        async def send_error():
-            try:
-                await context.bot.send_message(
-                    chat_id=update.effective_chat.id,
-                    text=f"❌ Error during scraping: {str(e)}"
-                )
-            except Exception as e2:
-                logger.error(f"Failed to send error: {e2}")
-        
-        loop.run_until_complete(send_error())
-    finally:
-        loop.close()
-
-async def scrape_and_forward_posts(channel_username: str, num_posts: int, context: ContextTypes.DEFAULT_TYPE):
-    """Scrape and forward posts from a channel"""
-    try:
-        # Check if channel exists in database
-        channel_data = None
-        if channels_collection:
-            channel_data = channels_collection.find_one({"username": channel_username})
-        
-        # Try to access the channel
-        try:
-            chat = await context.bot.get_chat(channel_username)
-            channel_title = chat.title
-            logger.info(f"✅ Found channel: {channel_title} ({channel_username})")
-        except Exception as e:
-            return f"❌ Cannot access channel {channel_username}: {str(e)}"
-        
-        # Get recent messages from the channel
-        messages = []
-        try:
-            # This is a simplified version - in practice you'd use telethon for better scraping
-            # For now, we'll use a placeholder approach
-            messages = await get_recent_messages_simplified(context.bot, channel_username, num_posts)
-        except Exception as e:
-            logger.error(f"Error getting messages: {e}")
-            return f"❌ Error getting messages from {channel_username}: {str(e)}"
-        
-        if not messages:
-            return f"📭 No messages found in {channel_username}"
-        
-        # Forward messages to target channel
-        forwarded_count = 0
-        for message in messages:
-            try:
-                # Forward the message to target channel
-                if FORWARD_CHANNEL:
-                    await forward_message_to_channel(context.bot, message, channel_username, FORWARD_CHANNEL)
-                    forwarded_count += 1
-                    await asyncio.sleep(1)  # Rate limiting
-            except Exception as e:
-                logger.error(f"Error forwarding message: {e}")
-                continue
-        
-        # Also save to scraped data
-        saved_count = 0
-        for message in messages:
-            try:
-                # Extract information from message
-                product_info = extract_info_from_message(message, channel_username)
-                
-                # AI enhancement
-                predicted_category, generated_description = await ai_enhance_product(
-                    product_info["title"], 
-                    product_info["description"]
-                )
-                
-                # Create post link
-                post_link = f"https://t.me/{channel_username.replace('@', '')}/{product_info['message_id']}"
-                
-                # Prepare data for JSON
-                json_product_data = {
-                    "user_id": "scraped",
-                    "title": product_info["title"],
-                    "description": product_info["description"],
-                    "price": product_info.get("price", ""),
-                    "phone": product_info.get("phone", ""),
-                    "images": [],
-                    "location": product_info.get("location", ""),
-                    "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "channel": channel_username,
-                    "post_link": post_link,
-                    "product_ref": str(product_info["message_id"]),
-                    "scraped_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "predicted_category": predicted_category,
-                    "generated_description": generated_description,
-                    "channel_verified": channel_data.get("isverified", False) if channel_data else False
-                }
-                
-                # Save to JSON
-                append_to_scraped_data(json_product_data)
-                saved_count += 1
-                
-            except Exception as e:
-                logger.error(f"Error processing message: {e}")
-                continue
-        
-        return (
-            f"✅ Scraping completed!\n\n"
-            f"📊 Results:\n"
-            f"• Channel: {channel_title}\n"
-            f"• Requested: {num_posts} posts\n"
-            f"• Found: {len(messages)} posts\n"
-            f"• Forwarded: {forwarded_count} posts\n"
-            f"• Saved to JSON: {saved_count} posts\n\n"
-            f"📁 Data saved to scraped_data.json"
-        )
-        
-    except Exception as e:
-        logger.error(f"Error in scrape_and_forward_posts: {e}")
-        return f"❌ Error during scraping: {str(e)}"
-
-async def get_recent_messages_simplified(bot, channel_username: str, limit: int):
-    """Simplified function to get recent messages from a channel"""
-    # Note: This is a placeholder. In practice, you'd need more sophisticated
-    # Telegram API access or use telethon for better message retrieval
-    
-    # For now, return an empty list - you would need to implement this
-    # using telethon or enhanced bot permissions
-    return []
-
-async def forward_message_to_channel(bot, message, source_channel: str, target_channel: str):
-    """Forward a message to target channel"""
-    try:
-        # This is a simplified version - in practice you'd need message object
-        # with proper forwarding capabilities
-        pass
-    except Exception as e:
-        logger.error(f"Error forwarding message: {e}")
-        raise
-
-def extract_info_from_message(message, channel_username: str):
-    """Extract product information from a message"""
-    # Simplified extraction - in practice you'd parse the message text
-    return {
-        "title": f"Product from {channel_username}",
-        "description": "Scraped product description",
-        "price": "",
-        "phone": "",
-        "location": "",
-        "message_id": str(hash(str(message) + str(datetime.now())))[:10]
-    }
-
-async def ai_enhance_product(title: str, description: str):
-    """AI enhancement for scraped products"""
-    try:
-        if HUGGINGFACE_API_TOKEN:
-            # Combine title and description for classification
-            input_text = f"{title} {description}".strip()
-            
-            # Define candidate categories
-            candidate_labels = [
-                "Electronics", "Clothing", "Home & Kitchen", 
-                "Beauty & Personal Care", "Sports & Outdoors",
-                "Books", "Toys & Games", "Automotive", 
-                "Jewelry", "Services", "Other"
-            ]
-            
-            # Classify product category
-            classification_payload = {
-                "inputs": input_text,
-                "parameters": {"candidate_labels": candidate_labels}
-            }
-            classification_result = call_huggingface_api("facebook/bart-large-mnli", classification_payload)
-            
-            if classification_result and isinstance(classification_result, dict):
-                predicted_category = classification_result.get("labels", ["Other"])[0]
-            else:
-                predicted_category = "Other"
-            
-            # Generate description
-            if len(description) > 50:
-                summarization_payload = {
-                    "inputs": description,
-                    "parameters": {"max_length": 150, "min_length": 30, "do_sample": False}
-                }
-                summarization_result = call_huggingface_api("facebook/bart-large-cnn", summarization_payload)
-                if summarization_result and isinstance(summarization_result, list) and len(summarization_result) > 0:
-                    generated_description = summarization_result[0].get("summary_text", description)
-                else:
-                    generated_description = description
-            else:
-                generated_description = description
-            
-            return predicted_category, generated_description
-        else:
-            return "Other", description
-    except Exception as e:
-        logger.warning(f"⚠️ AI enhancement failed: {e}")
-        return "Other", description
-
-async def cancel_scraping(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Cancels the scraping process"""
-    await update.message.reply_text("❌ Scraping cancelled.")
-    return ConversationHandler.END
-
 # --- New S3 Status Commands ---
 
 async def s3_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2732,11 +2445,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "/s3storage - Storage usage and costs\n\n"
         )
     
-    message += (
-        "*Scraping Commands:*\n"
-        "/scrape - Scrape and forward posts from channels\n\n"
-        "/help for all commands"
-    )
+    message += "/help for all commands"
     
     await update.message.reply_text(message, parse_mode="Markdown")
 
@@ -2762,15 +2471,17 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "*Admin Commands:*\n"
             "/s3status - S3 bucket connection and file status\n"
             "/jsonstatus - Detailed JSON file statistics\n" 
-            "/s3storage - Storage usage and cost information\n"
-            "/downloadjson - Download the complete JSON data file from S3\n\n"
+            "/s3storage - Storage usage and cost information\n\n"
         )
     
-    help_text += (
-        "*Scraping Commands:*\n"
-        "/scrape - Scrape and forward posts from channels\n\n"
-        "Channel contact and location will be used for all products."
-    )
+    help_text += "Channel contact and location will be used for all products."
+
+    # Only show admin commands to admins
+    if is_user_admin:
+        help_text += (
+            "*Data Management Commands:*\n"
+            "/downloadjson - Download the complete JSON data file from S3\n\n"
+        )
 
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
@@ -2846,9 +2557,6 @@ def main():
     application.add_handler(CommandHandler("jsonstatus", json_status))
     application.add_handler(CommandHandler("s3storage", s3_storage_info))
     application.add_handler(CommandHandler("downloadjson", download_json))
-    
-    # New scraping command
-    application.add_handler(CommandHandler("scrape", start_scraping_command))
 
     # Channel addition conversation
     channel_conv = ConversationHandler(
@@ -2905,7 +2613,7 @@ def main():
         persistent=True,
     )
 
-    # Edit product conversation
+    # Add this to your main application setup
     edit_conv = ConversationHandler(
         entry_points=[CommandHandler("editproduct", edit_product_command)],
         states={
@@ -2930,31 +2638,12 @@ def main():
         allow_reentry=True
     )
 
-    # Scraping conversation
-    scrape_conv = ConversationHandler(
-        entry_points=[CommandHandler("scrape", start_scraping_command)],
-        states={
-            SELECT_CHANNEL_FOR_SCRAPING: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_scraping_channel)
-            ],
-            SELECT_POST_COUNT: [
-                CallbackQueryHandler(handle_post_count_selection, pattern="^posts_"),
-                CallbackQueryHandler(cancel_scraping, pattern="^cancel_scraping$"),
-            ],
-        },
-        fallbacks=[
-            CommandHandler("cancel", cancel),
-            CommandHandler("help", help_command),
-            MessageHandler(filters.ALL, cancel)
-        ],
-        name="scrape_conversation",
-        persistent=True,
-    )
+# Don't forget to add this to your application:
+# application.add_handler(edit_conv)
 
     application.add_handler(channel_conv)
     application.add_handler(product_conv)
     application.add_handler(edit_conv)
-    application.add_handler(scrape_conv)
 
     # Note: Redis persistence handles automatic persistence, no manual sync needed
 
