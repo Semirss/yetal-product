@@ -2728,6 +2728,26 @@ async def handle_repost_days(update: Update, context: ContextTypes.DEFAULT_TYPE)
             except (ValueError, TypeError):
                 price_val = 0
             
+            # Validate and set defaults for title/description
+            item_title = item.get("title", "").strip()
+            item_description = item.get("description", "").strip()
+            
+            # Ensure title is never empty
+            if not item_title or item_title == "No Title":
+                item_title = "Product Listing"
+                logger.warning(f"Empty title detected for item from {username}, using default")
+            
+            # Ensure description has content
+            if not item_description:
+                item_description = "No description available"
+                logger.warning(f"Empty description for item: {item_title}")
+            
+            # Log extraction results for debugging
+            if not item_phone:
+                logger.info(f"No phone extracted for: {item_title[:30]}...")
+            if price_val == 0:
+                logger.info(f"No price extracted for: {item_title[:30]}...")
+            
             # Create channel data specific for this item using REAL data
             item_channel_data = {
                 "username": username,
@@ -2739,13 +2759,13 @@ async def handle_repost_days(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
             # Basic product structure
             product_data = {
-                "title": item["title"],
-                "description": item["description"],
+                "title": item_title,
+                "description": item_description,
                 "price": price_val,
                 "price_visible": 1 if price_val > 0 else 0,
                 "stock": 1,  # Default stock for scraped items
                 "predicted_category": "Other", 
-                "generated_description": item["description"],
+                "generated_description": item_description,
                 "media_paths": item.get("media_paths", ([item["media_path"]] if item.get("media_path") else []))
             }
             

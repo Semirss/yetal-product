@@ -146,11 +146,13 @@ def extract_info(text, message_id):
     title_match = re.split(r'\n|💸|☘️☘️PRICE|Price\s*:|💵', text)[0].strip()
     title = title_match[:100] if title_match else "No Title"
     
-    phone_matches = re.findall(r'(\+251\d{8,9}|09\d{8})', text)
+    # Match multiple phone number formats: +251..., 251..., 09..., +2519...
+    phone_matches = re.findall(r'(\+?251\d{9}|\+251\d{8}|09\d{8})', text)
     phone = phone_matches[0] if phone_matches else ""
     
+    # Match multiple price formats: Price: 100, 💰 Price: 100, ETB 100, 100 ETB, etc.
     price_match = re.search(
-        r'(Price|💸|☘️☘️PRICE)[:\s]*([\d,]+)|([\d,]+)\s*(ETB|Birr|birr|💵)', 
+        r'(Price|💸|💰|☘️☘️PRICE)[:\s]*([\d,]+)|([\d,]+)\s*(ETB|Birr|birr|💵)', 
         text, 
         re.IGNORECASE
     )
@@ -185,16 +187,28 @@ def extract_info(text, message_id):
     
     # Remove metadata patterns from description to avoid duplication
     metadata_patterns = [
-        r'(Price|💸|☘️☘️PRICE)[:\s]*([\d,]+[.,]?\d*)\s*(ETB|Birr|birr|💵)?',
-        r'([\d,]+)\s*(ETB|Birr|birr|💵)',
+        # Price with emojis and various formats (Price: 100, Price: ETB 100, etc)
+        r'(Price|💸|💰|☘️☘️PRICE)[:\s]*(ETB|Birr|birr|💵)?\s*([\d,]+[.,]?\d*)\s*(ETB|Birr|birr|💵)?',
+        # Standalone price formats
+        r'([\d,]+)\s*(ETB|Birr|birr|💵)', 
+        # Location with various emojis
         r'(📍|Address|Location|🌺🌺)[:\s]*(.+?)(?=\n|☘️|📞|@|$)',
-        r'(📞|Contact|Phone)[:\s]*(\+251\d{8,9}|09\d{8})',
-        r'(\+251\d{8,9}|09\d{8})',
+        # Phone numbers with various labels and formats
+        r'(📞|Contact|Phone)[:\s]*(\+?251\d{9}|\+251\d{8}|09\d{8})',
+        # Standalone phone numbers
+        r'(\+?251\d{9}|\+251\d{8}|09\d{8})',
+        # Stock pattern if present (sometimes scraped text has it)
+        r'(📦|Stock)[:\s]*(\d+)',
+        # Usernames
         r'(@\w+)'
     ]
     
     for pattern in metadata_patterns:
         clean_description = re.sub(pattern, "", clean_description, flags=re.IGNORECASE)
+        
+    # Extra cleanup for empty lines left behind
+    lines = [line.strip() for line in clean_description.split('\n')]
+    clean_description = "\n".join([line for line in lines if line])
     
     # Clean up extra whitespace and newlines (preserve paragraph structure)
     # Remove single empty lines but keep double newlines (paragraphs)? 
