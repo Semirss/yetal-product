@@ -164,7 +164,12 @@ def extract_info(text, message_id):
         text, 
         re.IGNORECASE
     )
-    location = location_match.group(2).strip() if location_match else ""
+    if location_match:
+        location = location_match.group(2).strip()
+        # Remove any duplicate "Location:" prefix that might be in the extracted text
+        location = re.sub(r'^(Location|Address|📍|🌺🌺)\s*:\s*', '', location, flags=re.IGNORECASE).strip()
+    else:
+        location = ""
     
     channel_mention = re.search(r'(@\w+)', text)
     channel_mention = channel_mention.group(1) if channel_mention else ""

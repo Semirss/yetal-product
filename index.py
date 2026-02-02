@@ -2717,12 +2717,23 @@ async def handle_repost_days(update: Update, context: ContextTypes.DEFAULT_TYPE)
         }
         
         for item in items:
-            # Create channel data specific for this item to ensure correct contact/location
+            # Clean and extract real data from scraped item
+            item_phone = item.get("phone", "").strip()
+            item_location = item.get("location", "").strip()
+            item_price = item.get("price", "").strip()
+            
+            # Parse price to float, default to 0 if invalid
+            try:
+                price_val = float(item_price) if item_price else 0
+            except (ValueError, TypeError):
+                price_val = 0
+            
+            # Create channel data specific for this item using REAL data
             item_channel_data = {
                 "username": username,
                 "title": f"Scraped from {username}",
-                "contact": item["phone"] if item["phone"] else "See original",
-                "location": item["location"] if item["location"] else "See original",
+                "contact": item_phone if item_phone else "Not provided",
+                "location": item_location if item_location else "Not provided",
                 "channel_id": None 
             }
 
@@ -2730,9 +2741,9 @@ async def handle_repost_days(update: Update, context: ContextTypes.DEFAULT_TYPE)
             product_data = {
                 "title": item["title"],
                 "description": item["description"],
-                "price": item["price"] if item["price"] else 0,
-                "price_visible": 1,
-                "stock": 1,
+                "price": price_val,
+                "price_visible": 1 if price_val > 0 else 0,
+                "stock": 1,  # Default stock for scraped items
                 "predicted_category": "Other", 
                 "generated_description": item["description"],
                 "media_paths": item.get("media_paths", ([item["media_path"]] if item.get("media_path") else []))
