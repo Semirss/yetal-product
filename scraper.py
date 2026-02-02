@@ -187,24 +187,22 @@ def extract_info(text, message_id):
     
     # Remove metadata patterns from description to avoid duplication
     metadata_patterns = [
-        # Price with emojis and various formats (Price: 100, Price: ETB 100, etc)
-        r'(Price|💸|💰|☘️☘️PRICE)[:\s]*(ETB|Birr|birr|💵)?\s*([\d,]+[.,]?\d*)\s*(ETB|Birr|birr|💵)?',
-        # Standalone price formats
-        r'([\d,]+)\s*(ETB|Birr|birr|💵)', 
-        # Location with various emojis
-        r'(📍|Address|Location|🌺🌺)[:\s]*(.+?)(?=\n|☘️|📞|@|$)',
-        # Phone numbers with various labels and formats
-        r'(📞|Contact|Phone)[:\s]*(\+?251\d{9}|\+251\d{8}|09\d{8})',
-        # Standalone phone numbers
+        # Match lines starting with price markers, regardless of content
+        r'^(Price|💸|💰|☘️☘️PRICE).*$',
+        # Match lines starting with location markers
+        r'^(📍|Address|Location|🌺🌺).*$',
+        # Match lines starting with contact markers
+        r'^(📞|Contact|Phone).*$',
+        # Match lines starting with stock markers
+        r'^(📦|Stock).*$',
+        # Specific extracted values (in case they are embedded in text)
         r'(\+?251\d{9}|\+251\d{8}|09\d{8})',
-        # Stock pattern if present (sometimes scraped text has it)
-        r'(📦|Stock)[:\s]*(\d+)',
-        # Usernames
         r'(@\w+)'
     ]
     
     for pattern in metadata_patterns:
-        clean_description = re.sub(pattern, "", clean_description, flags=re.IGNORECASE)
+        # Use multiline flag to match ^ to start of lines
+        clean_description = re.sub(pattern, "", clean_description, flags=re.IGNORECASE | re.MULTILINE)
         
     # Extra cleanup for empty lines left behind
     lines = [line.strip() for line in clean_description.split('\n')]
