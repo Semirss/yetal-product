@@ -2717,6 +2717,20 @@ async def handle_repost_days(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "channel_id": None # No posting to user channel, only to Product Channel
         }
         
+        # Check verification status once
+        channel_verified_status = False
+        if channels_collection is not None:
+            try:
+                # Use lower() for lookup as per add_channel
+                doc = channels_collection.find_one({"username": username.lower()})
+                if doc and doc.get("isverified") is True:
+                    channel_verified_status = True
+                    logger.info(f"✅ Channel {username} is VERIFIED")
+                else:
+                    logger.info(f"ℹ️ Channel {username} is NOT verified")
+            except Exception as e:
+                logger.error(f"❌ Error checking verification: {e}")
+        
         for item in items:
             # Clean and extract real data from scraped item
             item_phone = item.get("phone", "").strip()
@@ -2800,7 +2814,7 @@ async def handle_repost_days(update: Update, context: ContextTypes.DEFAULT_TYPE)
                         "scraped_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "predicted_category": "Other",
                         "generated_description": product_data["description"],
-                        "channel_verified": False,
+                        "channel_verified": channel_verified_status,
                          "has_media_group": len(product_data["media_paths"]) > 1
                     }
                     append_to_scraped_data(json_product_data)
