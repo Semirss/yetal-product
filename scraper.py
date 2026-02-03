@@ -150,15 +150,23 @@ def extract_info(text, message_id):
     phone_matches = re.findall(r'(\+?251\d{9}|\+251\d{8}|09\d{8})', text)
     phone = phone_matches[0] if phone_matches else ""
     
-    # Match multiple price formats: Price: 100, 💰 Price: 100, ETB 100, 100 ETB, etc.
+    # Fallback: if no strict phone match, look for Contact label content
+    if not phone:
+        # Handle cases like "📞 Contact: 123" or just "Contact: 123"
+        contact_match = re.search(r'(?:📞|Contact|Phone)(?:\s*(?:Contact|Phone))?[:\s]*(.+?)(?=\n|$)', text, re.IGNORECASE)
+        if contact_match:
+            phone = contact_match.group(1).strip()
+
+    # Match multiple price formats: Price: 100, 💰 Price: 100, ETB 100, 100 ETB, Price: ETB 100 etc.
+    # We look for the label (optionally repeated), then optional currency, then amount OR amount then currency
     price_match = re.search(
-        r'(Price|💸|💰|☘️☘️PRICE)[:\s]*([\d,]+)|([\d,]+)\s*(ETB|Birr|birr|💵)', 
+        r'(?:Price|💸|💰|☘️☘️PRICE)(?:\s*(?:Price|PRICE))?[:\s]*(?:ETB|Birr|birr|💵)?\s*([\d,.]+)|([\d,.]+)\s*(?:ETB|Birr|birr|💵)', 
         text, 
         re.IGNORECASE
     )
     price = ""
     if price_match:
-        price = price_match.group(2) or price_match.group(3) or ""
+        price = price_match.group(1) or price_match.group(2) or ""
         price = price.replace(',', '').strip()
     
     location_match = re.search(
@@ -175,6 +183,9 @@ def extract_info(text, message_id):
     
     channel_mention = re.search(r'(@\w+)', text)
     channel_mention = channel_mention.group(1) if channel_mention else ""
+
+    stock_match = re.search(r'(?:📦|Stock)[:\s]*(\d+)', text, re.IGNORECASE)
+    stock = stock_match.group(1) if stock_match else ""
 
     # Clean description by removing extracted metadata lines
     clean_description = text
@@ -219,6 +230,7 @@ def extract_info(text, message_id):
         "description": clean_description,
         "price": price,
         "phone": phone,
+        "stock": stock,
         "location": location,
         "channel_mention": channel_mention,
         "product_ref": str(message_id) 
@@ -305,6 +317,7 @@ async def scrape_channel_async(channel_username: str, days: int):
                     "description": info["description"],
                     "price": info["price"],
                     "phone": info["phone"],
+                    "stock": info.get("stock", ""),
                     "location": info["location"],
                     "original_date": main_msg.date.isoformat(),
                     "original_link": f"https://t.me/{channel_username.replace('@', '')}/{main_msg.id}",
@@ -337,6 +350,7 @@ async def scrape_channel_async(channel_username: str, days: int):
                     "description": info["description"],
                     "price": info["price"],
                     "phone": info["phone"],
+                    "stock": info.get("stock", ""),
                     "location": info["location"],
                     "original_date": message.date.isoformat(),
                     "original_link": f"https://t.me/{channel_username.replace('@', '')}/{message.id}",

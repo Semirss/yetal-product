@@ -2721,12 +2721,19 @@ async def handle_repost_days(update: Update, context: ContextTypes.DEFAULT_TYPE)
             item_phone = item.get("phone", "").strip()
             item_location = item.get("location", "").strip()
             item_price = item.get("price", "").strip()
+            item_stock = item.get("stock", "").strip()
             
             # Parse price to float, default to 0 if invalid
             try:
                 price_val = float(item_price) if item_price else 0
             except (ValueError, TypeError):
                 price_val = 0
+            
+            # Parse stock, default to 1 if invalid or empty
+            try:
+                stock_val = int(item_stock) if item_stock and item_stock.isdigit() else 1
+            except (ValueError, TypeError):
+                stock_val = 1
             
             # Validate and set defaults for title/description
             item_title = item.get("title", "").strip()
@@ -2763,7 +2770,7 @@ async def handle_repost_days(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 "description": item_description,
                 "price": price_val,
                 "price_visible": 1 if price_val > 0 else 0,
-                "stock": 1,  # Default stock for scraped items
+                "stock": stock_val,
                 "predicted_category": "Other", 
                 "generated_description": item_description,
                 "media_paths": item.get("media_paths", ([item["media_path"]] if item.get("media_path") else []))
