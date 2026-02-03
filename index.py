@@ -2535,6 +2535,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "*Basic Commands:*\n"
         "/start - Welcome message\n"
         "/help - This message\n"
+        "/repost - repost your products\n"
         "/addchannel - Set up your sales channel (required first)\n"
         "/addproduct - Create a new product listing\n"
         "/editproduct - Modify an existing product\n"
