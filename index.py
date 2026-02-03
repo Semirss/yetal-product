@@ -1614,12 +1614,15 @@ async def finish_product(update: Update, context: ContextTypes.DEFAULT_TYPE, sto
         channel_verified = False
         if channels_collection is not None:
             try:
-                doc = channels_collection.find_one({"username": channel_data.get("username")})
+                # Use regex for case-insensitive lookup
+                username = channel_data.get("username", "")
+                pattern = f"^{re.escape(username)}$"
+                doc = channels_collection.find_one({"username": {"$regex": pattern, "$options": "i"}})
                 if doc and doc.get("isverified") == True:
                     channel_verified = True
-                    logger.info(f"✅ Channel {channel_data.get('username')} is verified")
+                    logger.info(f"✅ Channel {username} is verified (matched: {doc.get('username')})")
                 else:
-                    logger.info(f"⚠️ Channel {channel_data.get('username')} is not verified")
+                    logger.info(f"⚠️ Channel {username} is not verified")
             except Exception as e:
                 logger.error(f"❌ Error checking channel verification: {e}")
 
@@ -2029,12 +2032,15 @@ async def confirm_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         channel_verified = False
         if channels_collection is not None:
             try:
-                doc = channels_collection.find_one({"username": channel_data.get("username")})
+                # Use regex for case-insensitive lookup
+                username = channel_data.get("username", "")
+                pattern = f"^{re.escape(username)}$"
+                doc = channels_collection.find_one({"username": {"$regex": pattern, "$options": "i"}})
                 if doc and doc.get("isverified") == True:
                     channel_verified = True
-                    logger.info(f"✅ Channel {channel_data.get('username')} is verified (edit)")
+                    logger.info(f"✅ Channel {username} is verified (edit, matched: {doc.get('username')})")
                 else:
-                    logger.info(f"⚠️ Channel {channel_data.get('username')} is not verified (edit)")
+                    logger.info(f"⚠️ Channel {username} is not verified (edit)")
             except Exception as e:
                 logger.error(f"❌ Error checking channel verification for edit: {e}")
 
@@ -2057,41 +2063,6 @@ async def confirm_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "channel_verified": channel_verified
         }
         
-        # ✅ UPDATE JSON FILE WITH EDITED PRODUCT
-        logger.info("🔄 Updating JSON file with edited product...")
-
-        # Check channel verification from MongoDB for edited product
-        channel_verified = False
-        if channels_collection is not None:
-            try:
-                doc = channels_collection.find_one({"username": channel_data.get("username")})
-                if doc and doc.get("isverified") == True:
-                    channel_verified = True
-                    logger.info(f"✅ Channel {channel_data.get('username')} is verified (edit)")
-                else:
-                    logger.info(f"⚠️ Channel {channel_data.get('username')} is not verified (edit)")
-            except Exception as e:
-                logger.error(f"❌ Error checking channel verification for edit: {e}")
-
-        # Prepare updated data for JSON with CORRECT FIELD NAMES AND FORMAT
-        json_product_data = {
-            "user_id": str(edited_product["user_id"]),
-            "title": edited_product["title"],
-            "description": edited_product["description"],
-            "price": str(edited_product["price"]),
-            "phone": channel_data.get("contact", "Not provided"),
-            "images": [],
-            "location": channel_data.get("location", ""),
-            "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "channel": channel_data.get("username", "N/A"),
-            "post_link": user_channel_link,  # Using the TARGET channel format
-            "product_ref": edited_product["product_uuid"],  # TARGET channel message ID
-            "last_edited": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "predicted_category": edited_product["predicted_category"],
-            "generated_description": edited_product["generated_description"],
-            "channel_verified": channel_verified
-        }
-
         # Update existing record in JSON file instead of appending
         json_success = update_scraped_data(json_product_data)
         if json_success:
@@ -2721,11 +2692,14 @@ async def handle_repost_days(update: Update, context: ContextTypes.DEFAULT_TYPE)
         channel_verified_status = False
         if channels_collection is not None:
             try:
-                # Use lower() for lookup as per add_channel
-                doc = channels_collection.find_one({"username": username.lower()})
+                # Use regex for case-insensitive lookup to match any casing in DB (e.g. @usmartEt vs @usmartet)
+                # Escaping ensures safety although telegram usernames are simple
+                pattern = f"^{re.escape(username)}$"
+                doc = channels_collection.find_one({"username": {"$regex": pattern, "$options": "i"}})
+                
                 if doc and doc.get("isverified") is True:
                     channel_verified_status = True
-                    logger.info(f"✅ Channel {username} is VERIFIED")
+                    logger.info(f"✅ Channel {username} is VERIFIED (matched: {doc.get('username')})")
                 else:
                     logger.info(f"ℹ️ Channel {username} is NOT verified")
             except Exception as e:
