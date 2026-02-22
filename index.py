@@ -73,7 +73,7 @@ logging.basicConfig(
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 MASTER_DATA_CHANNEL_ID = os.getenv("MASTER_DATA_CHANNEL_ID")
 PRODUCT_CHANNEL_ID = os.getenv("PRODUCT_CHANNEL_ID")
-YETAL_SEARCH_USERNAME = os.getenv("YETAL_SEARCH_USERNAME", "Yetal_Search")
+YETAL_SEARCH_USERNAME = os.getenv("YETAL_SEARCH_USERNAME", "yetalco")
 
 # S3 configuration - FIXED to work without ListAllMyBuckets permission
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
@@ -1956,7 +1956,7 @@ async def confirm_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if target_channel_username and edited_product.get("posted_message_id"):
             user_channel_link = f"https://t.me/{target_channel_username}/{edited_product['posted_message_id']}"
         else:
-            user_channel_link = f"https://t.me/Yetal_Search/{edited_product['product_uuid']}"
+            user_channel_link = f"https://t.me/yetalco/{edited_product['product_uuid']}"
         
         # Prepare user caption (respects price visibility)
         user_caption = format_product_message(edited_product, channel_data)
