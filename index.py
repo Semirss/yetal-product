@@ -3038,6 +3038,11 @@ def run_bot_with_flask():
     flask_thread = threading.Thread(target=run_flask_app, daemon=True)
     flask_thread.start()
     
+    # Python 3.14 no longer auto-creates an event loop via asyncio.get_event_loop().
+    # Explicitly create and set one before PTB's run_polling() tries to use it.
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
     # Run the bot in main thread
     main()
 
