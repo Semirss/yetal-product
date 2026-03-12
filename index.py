@@ -81,6 +81,10 @@ AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 AWS_BUCKET_NAME = os.getenv("AWS_BUCKET_NAME") or os.getenv("S3_BUCKET_NAME")
 AWS_REGION = os.getenv("AWS_REGION", "eu-north-1")
 
+# GitHub configuration for image hosting
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+GITHUB_REPO = os.getenv("GITHUB_REPO")   # e.g. "username/yetal-product-render"
+
 # Redis configuration for session persistence (using custom RedisPersistence class)
 REDIS_URL = os.getenv("REDIS_URL")
 
@@ -189,6 +193,80 @@ else:
 
 HUGGINGFACE_API_TOKEN = os.getenv("HUGGINGFACE_API_TOKEN")
 logger.info(f"🔧 Hugging Face API Token: {'SET' if HUGGINGFACE_API_TOKEN and len(HUGGINGFACE_API_TOKEN) > 10 else 'INVALID/EMPTY'}")
+
+# === 📸 GitHub Image Upload ===
+
+GITHUB_RATE_LIMITED = False  # Sentinel flag shared across all uploads
+
+def upload_image_to_github(local_path: str, dest_filename: str) -> str | None:
+    """
+    Upload a local image file to the GitHub repo under the `images/` folder.
+    Returns the relative path e.g. "images/12345.jpg" on success, or None on failure.
+    Returns the sentinel string "RATE_LIMITED" if GitHub API rate-limit is hit.
+    """
+    global GITHUB_RATE_LIMITED
+
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        logger.warning("⚠️ GITHUB_TOKEN or GITHUB_REPO not set — skipping image upload")
+        return None
+
+    if not local_path or not os.path.exists(local_path):
+        logger.warning(f"⚠️ Image file not found: {local_path}")
+        return None
+
+    import base64
+
+    github_path = f"images/{dest_filename}"
+    api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{github_path}"
+
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json",
+    }
+
+    # Check if file already exists (to get its SHA for update)
+    sha = None
+    try:
+        check_resp = requests.get(api_url, headers=headers, timeout=15)
+        if check_resp.status_code == 200:
+            sha = check_resp.json().get("sha")
+        elif check_resp.status_code in (403, 429):
+            logger.warning("⚠️ GitHub rate limit hit while checking existing file")
+            GITHUB_RATE_LIMITED = True
+            return "RATE_LIMITED"
+    except Exception as e:
+        logger.warning(f"⚠️ Could not check existing GitHub file: {e}")
+
+    # Read and encode file
+    try:
+        with open(local_path, "rb") as f:
+            content_b64 = base64.b64encode(f.read()).decode("utf-8")
+    except Exception as e:
+        logger.error(f"❌ Failed to read image file {local_path}: {e}")
+        return None
+
+    payload = {
+        "message": f"Add scraped image {dest_filename}",
+        "content": content_b64
+    }
+    if sha:
+        payload["sha"] = sha
+
+    try:
+        resp = requests.put(api_url, headers=headers, json=payload, timeout=30)
+        if resp.status_code in (200, 201):
+            logger.info(f"✅ Uploaded image to GitHub: {github_path}")
+            return github_path
+        elif resp.status_code in (403, 429):
+            logger.warning(f"⚠️ GitHub rate limit hit uploading {dest_filename}")
+            GITHUB_RATE_LIMITED = True
+            return "RATE_LIMITED"
+        else:
+            logger.error(f"❌ GitHub upload failed ({resp.status_code}): {resp.text[:200]}")
+            return None
+    except Exception as e:
+        logger.error(f"❌ GitHub upload exception for {dest_filename}: {e}")
+        return None
 
 # Custom Redis Persistence Class with S3 Backup
 class RedisPersistence(BasePersistence):
@@ -2753,6 +2831,45 @@ async def handle_repost_days(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 "channel_id": None 
             }
 
+            # --- Upload scraped images to GitHub ---
+            raw_media_paths = item.get("media_paths", ([item["media_path"]] if item.get("media_path") else []))
+            
+            # Batch limit: max 4 images per product
+            raw_media_paths = raw_media_paths[:4]
+            
+            github_image_paths = []  # Will hold "images/xxx.jpg" paths
+            rate_limited = False
+
+            global GITHUB_RATE_LIMITED
+
+            for media_local_path in raw_media_paths:
+                if not media_local_path:
+                    continue
+                
+                # If rate limit was hit, skip uploading images for the rest of this session's batch
+                if GITHUB_RATE_LIMITED:
+                    rate_limited = True
+                    break
+                
+                # Build a unique filename: channel_messageref_index.ext
+                ext = os.path.splitext(media_local_path)[1] or ".jpg"
+                dest_name = f"{username.replace('@', '')}_{item['product_ref']}_{len(github_image_paths)}{ext}"
+                result = upload_image_to_github(media_local_path, dest_name)
+                if result == "RATE_LIMITED":
+                    rate_limited = True
+                    GITHUB_RATE_LIMITED = True
+                    await context.bot.send_message(
+                        chat_id=update.effective_chat.id,
+                        text="⚠️ GitHub rate limit reached. The repost process has been paused to prevent duplication. Please use the repost command again in an hour to continue from where it left off."
+                    )
+                    break
+                elif result:
+                    github_image_paths.append(result)
+
+            # If rate limited, completely halt the repost process for the remaining items.
+            if rate_limited:
+                break
+
             # Basic product structure
             product_data = {
                 "title": item_title,
@@ -2760,9 +2877,9 @@ async def handle_repost_days(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 "price": price_val,
                 "price_visible": 1 if price_val > 0 else 0,
                 "stock": stock_val,
-                "predicted_category": "Other", 
+                "predicted_category": "Other",
                 "generated_description": item_description,
-                "media_paths": item.get("media_paths", ([item["media_path"]] if item.get("media_path") else []))
+                "media_paths": raw_media_paths
             }
             
             try:
@@ -2770,10 +2887,6 @@ async def handle_repost_days(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 success, _, _, _, yetal_msg_id, _ = await post_product_to_channels(product_data, item_channel_data, context, is_edited=False)
                 
                 if success:
-                    # Save to JSON manually since we're in a loop content
-                    # But wait, post_product_to_channels sends to Master Channel, but does NOT save to scraped_data.json
-                    # finish_product does the saving. So we need to save here.
-                    
                     json_product_data = {
                         "user_id": str(update.effective_user.id),
                         "title": product_data["title"],
@@ -2789,7 +2902,8 @@ async def handle_repost_days(update: Update, context: ContextTypes.DEFAULT_TYPE)
                         "predicted_category": "Other",
                         "generated_description": product_data["description"],
                         "channel_verified": channel_verified_status,
-                         "has_media_group": len(product_data["media_paths"]) > 1
+                        "has_media_group": len(raw_media_paths) > 1,
+                        "images": github_image_paths  # e.g. ["images/channel_123_0.jpg"]
                     }
                     append_to_scraped_data(json_product_data)
                     processed_count += 1
