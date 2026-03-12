@@ -256,7 +256,7 @@ def upload_image_to_github(local_path: str, dest_filename: str) -> str | None:
         resp = requests.put(api_url, headers=headers, json=payload, timeout=30)
         if resp.status_code in (200, 201):
             logger.info(f"✅ Uploaded image to GitHub: {github_path}")
-            return github_path
+            return f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/{github_path}"
         elif resp.status_code in (403, 429):
             logger.warning(f"⚠️ GitHub rate limit hit uploading {dest_filename}")
             GITHUB_RATE_LIMITED = True
